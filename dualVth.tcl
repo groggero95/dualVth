@@ -18,11 +18,16 @@ suppress_message UITE-416
 suppress_message LNK-041
 suppress_message NED-045
 suppress_message PTE-018
+suppress_message PWR-246
+suppress_message PWR-601
 
 
 # Set some handy text global variables
 set hvt CORE65LPHVT_nom_1.20V_25C.db:CORE65LPHVT
 set lvt CORE65LPLVT_nom_1.20V_25C.db:CORE65LPLVT
+
+define_user_attribute fitness -class pin -type float
+
 
 # This function swap the received collection of cells from LVT to HVT
 proc swap_HVT { full_name ref_name} {
@@ -70,9 +75,6 @@ proc LVT_restore {} {
 	
 	# Get all HVT pins
 	set hvt_pins [get_pins -filter "@cell.lib_cell.threshold_voltage_group == HVT"]
-
-	# Get the name of the pins 
-	set pinname [get_attribute $hvt_pins full_name -quiet] 
 	# eliminate multiple cells
 	set cell_unmasked [get_attribute $hvt_pins cell]
 	set cell [index_collection $cell_unmasked 0]
@@ -91,37 +93,52 @@ proc LVT_restore {} {
 # This function gets the current error from the desired savings
 proc get_error { start_power savings } {
 	# get the current power
-	set cur_power [get_total_leakage_pwr];
+	set cur_power [get_attribute [get_design] leakage_power];
 
 	# consider the power difference between the start and current power
-	set tmp1 [expr {10**[expr {int([lindex $cur_power 1]) - int([lindex $start_power 1])}]}]
+	#set tmp1 [expr {10**[expr {int([lindex $cur_power 1]) - int([lindex $start_power 1])}]}]
 	#puts $tmp1 
 	
 	#compute the savings
-	set save [expr { ([lindex $start_power 0] - [lindex $cur_power 0]/$tmp1)/[lindex $start_power 0] }]
+	set save [expr { ($start_power - $cur_power)/$start_power }]
 	
 	# compute how far away we are from the goal
 	return [expr {$save - $savings}]
 }
 
 
+proc get_ord_cells {} {
 
-# Get the leakage power through the command report_power
-proc get_total_leakage_pwr {} {
-    #-tee is used to echo the report
-    #save the report_power in a variable
-    redirect -variable power_log {report_power}
-    # Search for the leakage power
-    set num [regexp {Cell Leakage Power\s+=\s+(\d+\.\d+)e([+|-])(\d+)} $power_log match_str leakage_value leakage_sign leakage_exp]
+	set lvt_pins [get_pins -filter "@cell.lib_cell.threshold_voltage_group == LVT"]
+	# Sort the pin list by slack
+	set sorted_pins_collection [sort_collection $lvt_pins {fitness}]
+	# eliminate multiple cells
+	set cell_list_with_duplicate [get_attribute $sorted_pins_collection cell]
+	# create collection with cell ordered without duplicates
+	append_to_collection cell $cell_list_with_duplicate -unique
 
-    # remove zero padding, i.e. 08 is converted to 8
-    # avoiding this step may cause some problems
-    scan $leakage_exp %d leakage_exp
-
-    # return the value and the exponent separately
-    return [list $leakage_value $leakage_exp]
+	return $cell
 }
 
+
+proc update_fitness {} {
+	# Get all LVT pins
+	set lvt_pins [get_pins -filter "@cell.lib_cell.threshold_voltage_group == LVT"]
+
+	foreach_in_collection pin $lvt_pins {
+		set max_rise [get_attribute $pin max_rise_arrival]
+		set max_fall [get_attribute $pin max_fall_arrival]
+
+		if {$max_rise > $max_fall} {
+			set tmp [expr {[get_attribute $pin max_slack]/$max_rise}]
+		} else {
+			set tmp [expr {[get_attribute $pin max_slack]/$max_fall}]
+		}
+
+		set_user_attribute $pin fitness $tmp -quiet
+
+	}
+}
 
 
 # main function input a saving between 0 and 1
@@ -136,13 +153,26 @@ proc dualVth {args} {
 
 	# Get all LVT pins
 	set lvt_pins [get_pins -filter "@cell.lib_cell.threshold_voltage_group == LVT"]
+
+	foreach_in_collection pin $lvt_pins {
+		set max_rise [get_attribute $pin max_rise_arrival]
+		set max_fall [get_attribute $pin max_fall_arrival]
+
+		if {$max_rise > $max_fall} {
+			set tmp [expr {[get_attribute $pin max_slack]/$max_rise}]
+		} else {
+			set tmp [expr {[get_attribute $pin max_slack]/$max_fall}]
+		}
+
+		set_user_attribute $pin fitness $tmp -quiet
+
+	}
+
 	# Sort the pin list by slack
-	set sorted_pins_collection [sort_collection $lvt_pins {max_slack}]
-	# Get the name of the pins from the sorted list
-	set pinname [get_attribute $sorted_pins_collection full_name -quiet] 
+	set sorted_pins_collection [sort_collection $lvt_pins fitness]
 	# eliminate multiple cells
 	set cell_unmasked [get_attribute $sorted_pins_collection cell]
-	set cell [index_collection $cell_unmasked 0]
+	#set cell [index_collection $cell_unmasked 0]
 	append_to_collection cell $cell_unmasked -unique
 	# now cell_unmasked contains a collection of cells sorted from lower to higher slack
 	# Get full name and refernece name of each cell, we will need both to swap cells
@@ -153,7 +183,9 @@ proc dualVth {args} {
 	set L [llength $cell_full_name]
 
 	# Get the start power needed to compute the savings
-	set start_power [get_total_leakage_pwr]
+	set start_power [get_attribute [get_design] leakage_power]
+
+	
 
 	# Check trivial values of savings
 	# savings = 1 -> change all cells
@@ -167,7 +199,7 @@ proc dualVth {args} {
 		puts stderr "[expr {([clock clicks -millisec]-$t0)/1000.}] sec" ;# RS
 		
 		# return the maximum achievable savings
-		return [get_error $start_power $savings]
+		return [expr {1 - [get_error $start_power $savings]}]
 
 	} elseif { $savings == 0 } {
 		
@@ -179,7 +211,7 @@ proc dualVth {args} {
 	}
 	
 	# Set the start error on the desired saving
-	set error 0.025
+	set error 0.0125
 
 	# The algorithm need always 2 points thus we set the starting points
 
@@ -190,7 +222,7 @@ proc dualVth {args} {
 	# As a second point we make a guess considering a linear appoximation
 	# thus we excahnge the percentage of cells corresponding to the saving that we want to find
 	# This first guess could be improved to make the algorithm faster
-	set x2 [expr { int(ceil($savings*$L))}]
+	set x2 [expr { int(($savings*$L))}]
 
 	# Set the two extrems of the interval of cell to swap
 	# the extremes always start from the cells on the tail of the list
@@ -200,6 +232,12 @@ proc dualVth {args} {
 
 	# swap the computed range
 	[swap_HVT [lrange $cell_full_name $left_bound $right_bound] [lrange $cell_ref_name $left_bound $right_bound] ]
+	
+	#puts "$left_bound\n"
+	update_fitness	
+	set tmp [get_ord_cells]
+	lreplace $cell_full_name 0 $left_bound [get_attribute $tmp full_name]
+	lreplace $cell_ref_name 0 $left_bound [get_attribute $tmp ref_name]
 
  	# get the error
  	set fx2 [get_error $start_power $savings]
@@ -211,7 +249,7 @@ proc dualVth {args} {
 
 			# in order to avoid an infinite loop the error range inceases at each iteration
 			# this concept is taken from ageing 
-			set error [expr {$error*1.5}]
+			set error [expr {$error*2}]
 
 			# set new number of cell to swap
 			set x1 [expr {  int($x2 - ($fx2*($x2 - $x1)/($fx2 - $fx1)))  }]
@@ -240,6 +278,11 @@ proc dualVth {args} {
 				incr left_bound
 				# swap the necessary cells
 				[swap_HVT [lrange $cell_full_name $left_bound $right_bound] [lrange $cell_ref_name $left_bound $right_bound] ]
+				update_fitness				
+				set tmp [get_ord_cells]
+				lreplace $cell_full_name 0 $left_bound [get_attribute $tmp full_name]
+				lreplace $cell_ref_name 0 $left_bound [get_attribute $tmp ref_name]
+			
 			# test if we need to swap back some cells to LVT
 			} elseif { $x2 > $x1} {
 				
@@ -247,6 +290,11 @@ proc dualVth {args} {
 				incr right_bound
 				# in this case we invert the two exteremes of the interval
 				[swap_LVT [lrange $cell_full_name $right_bound $left_bound] [lrange $cell_ref_name $right_bound $left_bound] ]
+				update_fitness				
+				set tmp [get_ord_cells]
+				lreplace $cell_full_name 0 $right_bound [get_attribute $tmp full_name]
+				lreplace $cell_ref_name 0 $right_bound [get_attribute $tmp ref_name]
+
 			# the new point x1 is equal to x2
 			} else {
 				# if the point remains the same between two iterations 
@@ -268,7 +316,11 @@ proc dualVth {args} {
 					}
 					incr left_bound
 					[swap_HVT [lrange $cell_full_name $left_bound $right_bound] [lrange $cell_ref_name $left_bound $right_bound] ]
-			
+					update_fitness					
+					set tmp [get_ord_cells]
+					lreplace $cell_full_name 0 $left_bound [get_attribute $tmp full_name]
+					lreplace $cell_ref_name 0 $left_bound [get_attribute $tmp ref_name]
+
 				} else {
 					# if we already tried to swapp all cells just accepts the result
 					set x1 $x2
@@ -308,3 +360,24 @@ define_proc_attributes dualVth \
 {
 	{-savings "minimum % of leakage savings in range [0, 1]" lvt float required}
 }
+
+
+# cell -> full_name, leakage_power
+# pin -> arrival window, full name, escaped full name,
+# net -> full name
+
+# Port: These are the primary inputs, outputs or IO’s of the design.
+
+# Pin: It corresponds to the inputs, outputs or IO’s of the cells in the design
+
+#Net: These are the signal names, i.e., the wires that hook up the design
+#together by connecting ports to pins and/or pins to each other.
+
+#Clock: The port or pin that is identified as a clock source. The
+#identification may be internal to the library or it may be done using
+#dc_shell-t commands.
+
+#Library: Corresponds to the collection of technology specific cells that
+#the design is targeting for synthesis; or linking for reference.
+
+
