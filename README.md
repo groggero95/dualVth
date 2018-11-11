@@ -3,9 +3,7 @@ This project has been conceived during the "Synthesis and Optimization of Embedd
 
 ## Goal
 The aim of this tcl script is to write a plug-in for PrimeTime in to obtain a post synthesis power minimization.
-The new command tries to reassign LVT cells with HVT such that the slack penalties are minimized while still reaching the desitred power savings. Another rele
-vant parameter taken into account is the CPU time needed to complete the optim
-ization required, which has been sensibly minimized.
+The new command tries to reassign LVT cells with HVT such that the slack penalties are minimized while still reaching the desired power savings. Another relevant parameter taken into account is the CPU time needed to complete the optimization required, which has been sensibly minimized.
 
 ## Example
 After having synthesized the circuit with dc\_shell, and started PrimeTime, one should simply launch the script:
