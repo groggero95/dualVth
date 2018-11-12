@@ -2,7 +2,7 @@
 
 ####################################################################
 
-# This script is based on the idea of the newton raphson method to 
+# This script is based on the idea of the Newton Raphson method to 
 # find an approximation of the zero of a function.
 # Asking to find a saving equal to a certain number K is the same as 
 # asking when P(x) - K = 0, where P(x) is the leakage power of the design
@@ -35,7 +35,7 @@ foreach j $cur_cell_ref_name {
 # get the name of each instance of a cell
 set cell_name [get_attribute $cells full_name]
 
-# obtain the leakage power of each lvt cell substitute with hvt and get again thr laeakage
+# obtain the leakage power of each lvt cell substitute with hvt and get again their laeakage
 set LVT_leakage [get_attribute $cells leakage_power]
 for {set i 0} {$i < [llength $cell_name]} {incr i} {
 	size_cell [lindex $cell_name $i] [lindex $alt_cell_ref_name $i] 
@@ -51,14 +51,14 @@ dict set cell_info  [lindex $cell_name 0] a
 
 foreach cell $cell_name alt_cell $alt_cell_ref_name cur_cell $cur_cell_ref_name LVTp $LVT_leakage HVTp $HVT_leakage {
 	
-	# proper way to get the counterpart HVT cell but very slaow
+	# proper way to get the counterpart HVT cell but very slow
 	#set alt_cell [filter_collection [get_alternative_lib_cells -libraries "CORE65LPH*" [get_attribute $cell full_name]] "full_name =~ *[string replace [get_attribute $cell ref_name] 6 6 H]"] 
 	
 
 	# get estimate report on swapping cell
 	redirect -variable rpt {estimate_eco -type size_cell $cell -lib_cell $alt_cell}
 
-	# extarct informations from report
+	# extract information from report
 	set data [split $rpt "\n"]
 	set stage_delay []
 	set slack []
@@ -97,7 +97,7 @@ foreach cell $cell_name alt_cell $alt_cell_ref_name cur_cell $cur_cell_ref_name 
 }
 
 
-# celan all unused variables
+# clean all unused variables
 unset cells 
 unset alt_cell_ref_name
 unset cur_cell_ref_name
@@ -109,7 +109,7 @@ unset HVT_leakage
 
 
 
-# This function swap the received collection of cells from LVT to HVT
+# This function swaps the received collection of cells from LVT to HVT
 proc swap_HVT { full_name } {
 	global cell_info 
 
@@ -122,7 +122,7 @@ proc swap_HVT { full_name } {
 }
 
 
-# This function swap the received collection of cells from HVT to LVT
+# This function swaps the received collection of cells from HVT to LVT
 # the collection received already contains the right name 
 proc swap_LVT { full_name } {
 	global cell_info	
@@ -135,14 +135,14 @@ proc swap_LVT { full_name } {
 
 
 
-# This function is used for testing porposes only, it replace all cells in a desing 
+# This function is used for testing purposes only, it replaces all cells in a design 
 # from HVT to LVT 
 proc LVT_restore {} {
 	
 	# Get all HVT pins
 	set cells [get_cell -filter "lib_cell.threshold_voltage_group == HVT"]
 	# now cell_unmasked contains a collection of cells sorted from lower to higher slack
-	# Get full name and refernece name of each cell, we will need both to swap cells
+	# Get full name and reference name of each cell, we will need both to swap cells
 	set cell_full_name [get_attribute $cells full_name]
  
  	# call a function to swap cells
@@ -192,7 +192,7 @@ proc update_fitness { cell_list } {
 # main function input a saving between 0 and 1
 proc dualVth {args} {
 	# TODO uncomment to see performances
-	# get the start time, to evluate the performancess
+	# get the start time, to evaluate the performances
 	set t0 [clock clicks -millisec]
 
 	# get the argument
@@ -203,7 +203,7 @@ proc dualVth {args} {
 
 	set cell [sort_collection $cl fitness]
 
-	# Get full name and refernece name of each cell, we will need both to swap cells
+	# Get full name and reference name of each cell, we will need both to swap cells
 	set cell_full_name [get_attribute $cell full_name]
 	set cell_ref_name [get_attribute $cell ref_name]
 
@@ -219,21 +219,21 @@ proc dualVth {args} {
 	# savings = 1 -> change all cells
 	# savings = 0 -> change nothing
 	if { $savings  == 1} {
-		# call the function to swapp cells to HVT on all cels
+		# call the function to swap cells to HVT on all cells
 		swap_HVT $cell_full_name
 		
-		# TODO uncomment for performances estimation
+		# TODO uncomment for performance estimation
 		# evaluate the elapsed time in seconds
-		puts "[expr {([clock clicks -millisec]-$t0)/1000.}] sec" ;# RS
+		puts stderr "[expr {([clock clicks -millisec]-$t0)/1000.}] sec" ;# RS
 		
 		# return the maximum achievable savings
 		return [expr {1 - [get_error $start_power $savings]}]
 
 	} elseif { $savings == 0 } {
 		
-		# TODO uncomment for performances estimation
+		# TODO uncomment for performance estimation
 		# evaluate the elapsed time in seconds
-		puts "[expr {([clock clicks -millisec]-$t0)/1000.}] sec" ;# RS
+		puts stderr "[expr {([clock clicks -millisec]-$t0)/1000.}] sec" ;# RS
 
 		return 0
 	}
@@ -241,19 +241,19 @@ proc dualVth {args} {
 	# Set the start error on the desired saving
 	set error 0.0125
 
-	# The algorithm need always 2 points thus we set the starting points
+	# The algorithm needs always 2 points thus we set the starting points
 
 	# First trivial point is zero cell swapped, i.e. the error is -savings
 	set x1 0 
 	set fx1 [expr {0 - $savings}]
 
 	# As a second point we make a guess considering a linear appoximation
-	# thus we excahnge the percentage of cells corresponding to the saving that we want to find
+	# thus we exchange the percentage of cells corresponding to the saving that we want to find
 	# This first guess could be improved to make the algorithm faster
 	set x2 [expr { int(($savings*$L))}]
 
-	# Set the two extrems of the interval of cell to swap
-	# the extremes always start from the cells on the tail of the list
+	# Set the two extrema of the interval of cell to swap
+	# the extrema always start from the cells on the tail of the list
 	# which are the one with greater slack 
 	set left_bound [expr {$L - $x2}]
 	set right_bound [expr {$L - $x1 -1}]
@@ -265,7 +265,7 @@ proc dualVth {args} {
  	# get the error
  	set fx2 [get_error $start_power $savings]
 
- 	# untill we have a positive error and the current error is bigger than the desired one
+ 	# until we have a positive error and the current error is bigger than the desired one
  	# or the error is negative and the cell swapped are less than all the LVT cells 
  	# try to find a better solution
 	while { ($x2 != $L & $fx2 < 0) | ($fx2 > $error &  $fx2 > 0) } {
@@ -275,7 +275,7 @@ proc dualVth {args} {
 			set error [expr {$error*2}]
 
 			# set new number of cell to swap
-			set x1 [expr {  int(($x2 - ($fx2*($x2 - $x1)/($fx2 - $fx1)))*0.9)  }]
+			set x1 [expr {  int($x2 - ($fx2*($x2 - $x1)/($fx2 - $fx1)))  }]
 
 			# compute the left bound
 
@@ -294,7 +294,7 @@ proc dualVth {args} {
 			set right_bound [expr {$L - $x2 -1}]
 
 
-			# test if we need to swap more cell to HVT
+			# test if we need to swap more cells to HVT
 			if { $x1 > $x2 } {
 				
 				# adjust the left bound
@@ -313,18 +313,18 @@ proc dualVth {args} {
 			# the new point x1 is equal to x2
 			} else {
 				# if the point remains the same between two iterations 
-				# and the error is positive sipmly accepts the solution
+				# and the error is positive, simply accept the solution
 				if { $fx2 > 0 } {
 					set x1 $x2
 					set fx1 $fx2
 					break
-				# the erroer is negative so check if
-				# we already tried to swap all cels
+				# the error is negative so check if
+				# we already tried to swap all cells
 				} elseif { !$OOB } {
 					# if some cells are available give a little push 
 					# since it is possible that the algorithm remain stuck
 					# this  is caused by the fact that we are in a descrete domain 
-					# and this algorithm is thaught for continuous domain
+					# and this algorithm is thought for continuous domain
 					for {set i 0} {$i < 4 && $x1 < $L} {incr i} {
 						incr x1
 						set left_bound [expr {$left_bound - 1}]
@@ -334,7 +334,7 @@ proc dualVth {args} {
 
 
 				} else {
-					# if we already tried to swapp all cells just accepts the result
+					# if we already tried to swapp all cells just accept the result
 					set x1 $x2
 					set fx1 $fx2
 					break
@@ -360,7 +360,7 @@ proc dualVth {args} {
 	
 	# TODO uncomment for performances estimation
 	# evaluate the elapsed time in seconds
-	puts "[expr {([clock clicks -millisec]-$t0)/1000.}] sec" ;# RS
+	puts stderr "[expr {([clock clicks -millisec]-$t0)/1000.}] sec" ;# RS
 
 	# return the final saving
 	return [expr {$fx2 + $savings}]
@@ -376,14 +376,14 @@ define_proc_attributes dualVth \
 # all information have been found using the command
 # list_attribute -application -class ClassName
 
-# some usefull attributes
+# some useful attributes
 # cell -> full_name, leakage_power
 # pin -> arrival window, full name, cell, slack
 # net -> full name
 
-# Port: These are the primary inputs, outputs or IO?s of the design.
+# Port: These are the primary inputs, outputs or IO’s of the design.
 
-# Pin: It corresponds to the inputs, outputs or IO?s of the cells in the design
+# Pin: It corresponds to the inputs, outputs or IO’s of the cells in the design
 
 #Net: These are the signal names, i.e., the wires that hook up the design
 #together by connecting ports to pins and/or pins to each other.
