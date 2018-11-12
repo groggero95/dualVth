@@ -1,4 +1,5 @@
 
+
 ####################################################################
 
 # This script is based on the idea of the newton raphson method to 
@@ -11,9 +12,6 @@
 
 #########################################################################
 
-
-
-# suppres warning messages derivated from swapping cells
 suppress_message UITE-416
 suppress_message LNK-041
 suppress_message NED-045
@@ -21,52 +19,120 @@ suppress_message PTE-018
 suppress_message PWR-246
 suppress_message PWR-601
 
+define_user_attribute fitness -class cell -type float
 
-# Set some handy text global variables
-set hvt CORE65LPHVT_nom_1.20V_25C.db:CORE65LPHVT
-set lvt CORE65LPLVT_nom_1.20V_25C.db:CORE65LPLVT
 
-define_user_attribute fitness -class pin -type float
+# take all LVT cells
+set cells [get_cell -filter "lib_cell.threshold_voltage_group == LVT"]
+set alt_cell_ref_name []
+# create a collection with the library name of each used cell
+set cur_cell_ref_name  [get_attribute $cells ref_name]
+# create a collection with counterpart HVT cells
+foreach j $cur_cell_ref_name {
+	lappend alt_cell_ref_name [string replace $j 6 6 H] 
+}
+
+# get the name of each instance of a cell
+set cell_name [get_attribute $cells full_name]
+
+# obtain the leakage power of each lvt cell substitute with hvt and get again thr laeakage
+set LVT_leakage [get_attribute $cells leakage_power]
+for {set i 0} {$i < [llength $cell_name]} {incr i} {
+	size_cell [lindex $cell_name $i] [lindex $alt_cell_ref_name $i] 
+}
+update_power
+set HVT_leakage [get_attribute $cells leakage_power]
+for {set i 0} {$i < [llength $cell_name]} {incr i} {
+	size_cell [lindex $cell_name $i] [lindex $cur_cell_ref_name $i] 
+}
+
+dict set cell_info  [lindex $cell_name 0] a
+
+
+foreach cell $cell_name alt_cell $alt_cell_ref_name cur_cell $cur_cell_ref_name LVTp $LVT_leakage HVTp $HVT_leakage {
+	
+	# proper way to get the counterpart HVT cell but very slaow
+	#set alt_cell [filter_collection [get_alternative_lib_cells -libraries "CORE65LPH*" [get_attribute $cell full_name]] "full_name =~ *[string replace [get_attribute $cell ref_name] 6 6 H]"] 
+	
+
+	# get estimate report on swapping cell
+	redirect -variable rpt {estimate_eco -type size_cell $cell -lib_cell $alt_cell}
+
+	# extarct informations from report
+	set data [split $rpt "\n"]
+	set stage_delay []
+	set slack []
+	foreach line $data {
+		if {[regexp {.*[\s]+([0-9]+\.[0-9]+)[\s]+([0-9]+\.[0-9]+)[\s]+([0-9]+\.[0-9]+)[\s]+([0-9]+\.[0-9]+)} $line tot m1 m2 m3 m4]== 1} {
+			lappend stage_delay $m2
+			lappend slack $m4
+		}
+	}
+
+	# take the worst slack
+	if { [lindex $slack 1] > [lindex $slack 3]} {
+		set min_slack_cell [lindex $slack 3]
+	} else {
+		set min_slack_cell [lindex $slack 1]
+	}
+	
+	
+	# compute delay variation for rise and fall
+	set delta_delay_rise [expr {[lindex $stage_delay 0] - [lindex $stage_delay 1]}]
+	set delta_delay_fall [expr {[lindex $stage_delay 2] - [lindex $stage_delay 3]}]
+
+	# select maximum vatiation in delay
+	if {$delta_delay_fall > $delta_delay_rise} {
+		set delta_delay_max $delta_delay_fall
+	} else {
+		set delta_delay_max $delta_delay_rise
+	}
+
+	# associate a value to each cell directly inside the class 
+	set K [expr {($LVTp-$HVTp)*100000000/$delta_delay_max}]
+	set_user_attribute [get_cell -filter "full_name == $cell"] fitness [expr {($K*$min_slack_cell)}] -quiet
+	
+	dict set cell_info  $cell [list $cur_cell $alt_cell $K]
+
+}
+
+
+# celan all unused variables
+unset cells 
+unset alt_cell_ref_name
+unset cur_cell_ref_name
+unset cell_name
+unset LVT_leakage
+unset HVT_leakage
+
+
+
 
 
 # This function swap the received collection of cells from LVT to HVT
-proc swap_HVT { full_name ref_name} {
-	global hvt
+proc swap_HVT { full_name } {
+	global cell_info 
 
-	foreach b $full_name c $ref_name {
-			# the received collection have names of LVT cells so we 
-			# need to replace a couple of letters to correctly replace a cell
-			size_cell $b $hvt/[string replace $c 5 6 LH] 
+	foreach b $full_name {
+			
+			size_cell $b [lindex [dict get $cell_info $b] 1]
 		
 	}
 
 }
 
+
 # This function swap the received collection of cells from HVT to LVT
 # the collection received already contains the right name 
-proc swap_LVT { full_name ref_name} {
-	global lvt
+proc swap_LVT { full_name } {
+	global cell_info	
 
-	foreach b $full_name c $ref_name {
-			size_cell $b $lvt/$c
+	foreach b $full_name {
+			size_cell $b [lindex [dict get $cell_info $b] 0]
 	}
 
 }
 
-
-# This function is simila to the one above but it is used by nother function
-# to restore all HVT cells to LVT again
-proc swap_LVT_1 { full_name ref_name} {
-	global lvt
-
-	foreach b $full_name c $ref_name {
-			# the received collection have names of HVT cells so we 
-			# need to replace a couple of letters to correctly replace a cell 
-			size_cell $b $lvt/[string replace $c 5 6 LL]
-
-	}
-
-}
 
 
 # This function is used for testing porposes only, it replace all cells in a desing 
@@ -74,18 +140,13 @@ proc swap_LVT_1 { full_name ref_name} {
 proc LVT_restore {} {
 	
 	# Get all HVT pins
-	set hvt_pins [get_pins -filter "@cell.lib_cell.threshold_voltage_group == HVT"]
-	# eliminate multiple cells
-	set cell_unmasked [get_attribute $hvt_pins cell]
-	set cell [index_collection $cell_unmasked 0]
-	append_to_collection cell $cell_unmasked -unique
+	set cells [get_cell -filter "lib_cell.threshold_voltage_group == HVT"]
 	# now cell_unmasked contains a collection of cells sorted from lower to higher slack
 	# Get full name and refernece name of each cell, we will need both to swap cells
-	set cell_full_name [get_attribute $cell full_name]
-	set cell_ref_name [get_attribute $cell ref_name]
+	set cell_full_name [get_attribute $cells full_name]
  
  	# call a function to swap cells
-	[swap_LVT_1 $cell_full_name $cell_ref_name]
+	swap_LVT $cell_full_name
 
 }
 
@@ -94,10 +155,6 @@ proc LVT_restore {} {
 proc get_error { start_power savings } {
 	# get the current power
 	set cur_power [get_attribute [get_design] leakage_power];
-
-	# consider the power difference between the start and current power
-	#set tmp1 [expr {10**[expr {int([lindex $cur_power 1]) - int([lindex $start_power 1])}]}]
-	#puts $tmp1 
 	
 	#compute the savings
 	set save [expr { ($start_power - $cur_power)/$start_power }]
@@ -107,37 +164,28 @@ proc get_error { start_power savings } {
 }
 
 
-proc get_ord_cells {} {
 
-	set lvt_pins [get_pins -filter "@cell.lib_cell.threshold_voltage_group == LVT"]
-	# Sort the pin list by slack
-	set sorted_pins_collection [sort_collection $lvt_pins {fitness}]
-	# eliminate multiple cells
-	set cell_list_with_duplicate [get_attribute $sorted_pins_collection cell]
-	# create collection with cell ordered without duplicates
-	append_to_collection cell $cell_list_with_duplicate -unique
-
-	return $cell
-}
-
-
-proc update_fitness {} {
+# NOT USED it makes the algorithm very heavy
+proc update_fitness { cell_list } {
 	# Get all LVT pins
-	set lvt_pins [get_pins -filter "@cell.lib_cell.threshold_voltage_group == LVT"]
+	global cell_info
 
-	foreach_in_collection pin $lvt_pins {
-		set max_rise [get_attribute $pin max_rise_arrival]
-		set max_fall [get_attribute $pin max_fall_arrival]
+	set lvt_cells [get_cell -filter "lib_cell.threshold_voltage_group == LVT"]
 
-		if {$max_rise > $max_fall} {
-			set tmp [expr {[get_attribute $pin max_slack]/$max_rise}]
-		} else {
-			set tmp [expr {[get_attribute $pin max_slack]/$max_fall}]
-		}
 
-		set_user_attribute $pin fitness $tmp -quiet
+ 	foreach cell $cell_list {
+ 		set pin_tmp [get_pins -filter "@cell.full_name == $cell and direction == out"]
+ 		if { [sizeof_collection $pin_tmp] > 1} {
+ 			set max_slack [lindex [lsort -real [get_attribute $pin_tmp max_slack] ] 0] 
+ 		} else {
+ 			set max_slack [get_attribute $pin_tmp max_slack]
+ 		}
+ 		set K [lindex [dict get $cell_info $cell] 2]
+		set_user_attribute [get_cell -filter "full_name == $cell"] fitness [expr {($K*$max_slack)}] -quiet
+ 	}
 
-	}
+ 	return [get_attribute [sort_collection $lvt_cells fitness] full_name]
+	
 }
 
 
@@ -151,30 +199,10 @@ proc dualVth {args} {
 	parse_proc_arguments -args $args results
 	set savings $results(-savings)
 
-	# Get all LVT pins
-	set lvt_pins [get_pins -filter "@cell.lib_cell.threshold_voltage_group == LVT"]
+	set cl [get_cell -filter "lib_cell.threshold_voltage_group == LVT"]
 
-	foreach_in_collection pin $lvt_pins {
-		set max_rise [get_attribute $pin max_rise_arrival]
-		set max_fall [get_attribute $pin max_fall_arrival]
+	set cell [sort_collection $cl fitness]
 
-		if {$max_rise > $max_fall} {
-			set tmp [expr {[get_attribute $pin max_slack]/$max_rise}]
-		} else {
-			set tmp [expr {[get_attribute $pin max_slack]/$max_fall}]
-		}
-
-		set_user_attribute $pin fitness $tmp -quiet
-
-	}
-
-	# Sort the pin list by slack
-	set sorted_pins_collection [sort_collection $lvt_pins fitness]
-	# eliminate multiple cells
-	set cell_unmasked [get_attribute $sorted_pins_collection cell]
-	#set cell [index_collection $cell_unmasked 0]
-	append_to_collection cell $cell_unmasked -unique
-	# now cell_unmasked contains a collection of cells sorted from lower to higher slack
 	# Get full name and refernece name of each cell, we will need both to swap cells
 	set cell_full_name [get_attribute $cell full_name]
 	set cell_ref_name [get_attribute $cell ref_name]
@@ -192,11 +220,11 @@ proc dualVth {args} {
 	# savings = 0 -> change nothing
 	if { $savings  == 1} {
 		# call the function to swapp cells to HVT on all cels
-		[swap_HVT $cell_full_name $cell_ref_name]
+		swap_HVT $cell_full_name
 		
 		# TODO uncomment for performances estimation
 		# evaluate the elapsed time in seconds
-		puts stderr "[expr {([clock clicks -millisec]-$t0)/1000.}] sec" ;# RS
+		puts "[expr {([clock clicks -millisec]-$t0)/1000.}] sec" ;# RS
 		
 		# return the maximum achievable savings
 		return [expr {1 - [get_error $start_power $savings]}]
@@ -205,7 +233,7 @@ proc dualVth {args} {
 		
 		# TODO uncomment for performances estimation
 		# evaluate the elapsed time in seconds
-		puts stderr "[expr {([clock clicks -millisec]-$t0)/1000.}] sec" ;# RS
+		puts "[expr {([clock clicks -millisec]-$t0)/1000.}] sec" ;# RS
 
 		return 0
 	}
@@ -231,13 +259,8 @@ proc dualVth {args} {
 	set right_bound [expr {$L - $x1 -1}]
 
 	# swap the computed range
-	[swap_HVT [lrange $cell_full_name $left_bound $right_bound] [lrange $cell_ref_name $left_bound $right_bound] ]
+	swap_HVT [lrange $cell_full_name $left_bound $right_bound] 
 	
-	#puts "$left_bound\n"
-	update_fitness	
-	set tmp [get_ord_cells]
-	lreplace $cell_full_name 0 $left_bound [get_attribute $tmp full_name]
-	lreplace $cell_ref_name 0 $left_bound [get_attribute $tmp ref_name]
 
  	# get the error
  	set fx2 [get_error $start_power $savings]
@@ -252,7 +275,7 @@ proc dualVth {args} {
 			set error [expr {$error*2}]
 
 			# set new number of cell to swap
-			set x1 [expr {  int($x2 - ($fx2*($x2 - $x1)/($fx2 - $fx1)))  }]
+			set x1 [expr {  int(($x2 - ($fx2*($x2 - $x1)/($fx2 - $fx1)))*0.9)  }]
 
 			# compute the left bound
 
@@ -277,11 +300,7 @@ proc dualVth {args} {
 				# adjust the left bound
 				incr left_bound
 				# swap the necessary cells
-				[swap_HVT [lrange $cell_full_name $left_bound $right_bound] [lrange $cell_ref_name $left_bound $right_bound] ]
-				update_fitness				
-				set tmp [get_ord_cells]
-				lreplace $cell_full_name 0 $left_bound [get_attribute $tmp full_name]
-				lreplace $cell_ref_name 0 $left_bound [get_attribute $tmp ref_name]
+				swap_HVT [lrange $cell_full_name $left_bound $right_bound] 
 			
 			# test if we need to swap back some cells to LVT
 			} elseif { $x2 > $x1} {
@@ -289,11 +308,7 @@ proc dualVth {args} {
 				# adjust the right bound
 				incr right_bound
 				# in this case we invert the two exteremes of the interval
-				[swap_LVT [lrange $cell_full_name $right_bound $left_bound] [lrange $cell_ref_name $right_bound $left_bound] ]
-				update_fitness				
-				set tmp [get_ord_cells]
-				lreplace $cell_full_name 0 $right_bound [get_attribute $tmp full_name]
-				lreplace $cell_ref_name 0 $right_bound [get_attribute $tmp ref_name]
+				swap_LVT [lrange $cell_full_name $right_bound $left_bound]
 
 			# the new point x1 is equal to x2
 			} else {
@@ -315,11 +330,8 @@ proc dualVth {args} {
 						set left_bound [expr {$left_bound - 1}]
 					}
 					incr left_bound
-					[swap_HVT [lrange $cell_full_name $left_bound $right_bound] [lrange $cell_ref_name $left_bound $right_bound] ]
-					update_fitness					
-					set tmp [get_ord_cells]
-					lreplace $cell_full_name 0 $left_bound [get_attribute $tmp full_name]
-					lreplace $cell_ref_name 0 $left_bound [get_attribute $tmp ref_name]
+					swap_HVT [lrange $cell_full_name $left_bound $right_bound] 
+
 
 				} else {
 					# if we already tried to swapp all cells just accepts the result
@@ -348,7 +360,7 @@ proc dualVth {args} {
 	
 	# TODO uncomment for performances estimation
 	# evaluate the elapsed time in seconds
-	puts stderr "[expr {([clock clicks -millisec]-$t0)/1000.}] sec" ;# RS
+	puts "[expr {([clock clicks -millisec]-$t0)/1000.}] sec" ;# RS
 
 	# return the final saving
 	return [expr {$fx2 + $savings}]
@@ -361,14 +373,17 @@ define_proc_attributes dualVth \
 	{-savings "minimum % of leakage savings in range [0, 1]" lvt float required}
 }
 
+# all information have been found using the command
+# list_attribute -application -class ClassName
 
+# some usefull attributes
 # cell -> full_name, leakage_power
-# pin -> arrival window, full name, escaped full name,
+# pin -> arrival window, full name, cell, slack
 # net -> full name
 
-# Port: These are the primary inputs, outputs or IO’s of the design.
+# Port: These are the primary inputs, outputs or IO?s of the design.
 
-# Pin: It corresponds to the inputs, outputs or IO’s of the cells in the design
+# Pin: It corresponds to the inputs, outputs or IO?s of the cells in the design
 
 #Net: These are the signal names, i.e., the wires that hook up the design
 #together by connecting ports to pins and/or pins to each other.
@@ -379,5 +394,11 @@ define_proc_attributes dualVth \
 
 #Library: Corresponds to the collection of technology specific cells that
 #the design is targeting for synthesis; or linking for reference.
+
+
+
+################################################################################
+
+
 
 
